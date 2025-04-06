@@ -13,28 +13,75 @@ from django.utils import timezone
 from google.oauth2 import id_token
 from google.auth.transport import requests
 
+#MAIL SERVER
+from django.core.mail import EmailMultiAlternatives
+from django.conf import settings
+from django.template.loader import render_to_string
+
 User = get_user_model()  # Get the active User model (our custom one)
 
 class UserRegistrationView(APIView):
     def post(self, request):
+        print("--- UserRegistrationView POST (OTP Flow) ---")
         serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save() # serializer.save() now returns the created user
-            # --- GENERATE AND RETURN TOKENS ---
-            refresh = RefreshToken.for_user(user)
-            access_token = str(refresh.access_token)
-            refresh_token = str(refresh)
-            return Response(
-                {
-                    "success": True,
-                    "message": "User registered successfully",
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                },
-                status=status.HTTP_201_CREATED, # Use 201 for resource creation
-            )
-        # Return validation errors if serializer is invalid
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            print("Serializer IS VALID.")
+            try:
+                # Creates user with is_active=False
+                user = serializer.save()
+                print(f"User created (inactive): {user.email}")
+
+                # --- Generate OTP ---
+                user.generate_otp() # Method defined in User model
+
+                # --- Prepare Email Content ---
+                subject = 'Verify your Email for FFC App' # Your App Name
+                context = {
+                    'user': user,
+                    'otp': user.otp
+                }
+                # Render both text and HTML versions
+                text_body = render_to_string('accounts/email/otp_verification_email.txt', context)
+                html_body = render_to_string('accounts/email/otp_verification_email.html', context)
+
+                # --- Send Email ---
+                try:
+                    print(f"Attempting to send OTP email to {user.email}")
+                    msg = EmailMultiAlternatives(
+                        subject=subject,
+                        body=text_body, # Plain text version
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        to=[user.email] # Must be a list or tuple
+                    )
+                    msg.attach_alternative(html_body, "text/html") # Attach HTML version
+                    msg.send(fail_silently=False) # Send the email
+
+                    print("OTP Email sent successfully.")
+                    # --- Return Success Message (NO TOKENS) ---
+                    return Response(
+                        {"success": True, "message": "Registration successful. Please check your email for the OTP to verify your account."},
+                        status=status.HTTP_201_CREATED
+                    )
+                except Exception as mail_error:
+                    print(f"--- FAILED to send OTP email: {mail_error}")
+                    # Delete the inactive user if email fails to prevent orphan accounts
+                    user.delete()
+                    print(f"User {user.email} deleted due to email sending failure.")
+                    return Response(
+                        {"success": False, "message": f"Registration failed: Could not send verification email. Please try again later."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                # --- End Send Email ---
+
+            except Exception as e:
+                 # Error during serializer.save() or user.generate_otp()
+                 print(f"--- ERROR during user save or OTP generation: {e}")
+                 return Response({"error": f"Registration failed during user creation: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            # --- Serializer Validation Failed ---
+            print("Serializer IS NOT VALID.")
+            print(f"Serializer Errors: {serializer.errors}")
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 
@@ -90,6 +137,88 @@ class UserLoginView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
+class VerifyOTPView(APIView):
+    """
+    Verifies the OTP sent via email to activate a user account.
+    """
+    def post(self, request):
+        print("--- VerifyOTPView POST ---") # For debugging
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+
+        if not email or not otp:
+            return Response(
+                {"success": False, "message": "Email and OTP are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Find the user by email
+            user = User.objects.get(email=email)
+            print(f"Found user for OTP check: {user.email}, active: {user.is_active}, stored OTP: {user.otp}, expiry: {user.otp_expiry}") # Debug
+
+            if user.is_active:
+                print("User already active during OTP verification.")
+                return Response(
+                    {"success": False, "message": "Account already verified. Please log in."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check if OTP matches and is not expired
+            if user.otp == otp and user.otp_expiry and user.otp_expiry > timezone.now():
+                print("OTP match and not expired. Activating user.")
+                # OTP is valid
+                user.is_active = True
+                user.otp = None         # Clear OTP after successful use
+                user.otp_expiry = None  # Clear expiry
+                user.save(update_fields=['is_active', 'otp', 'otp_expiry'])
+
+                # Optional: Update last_login if needed (usually done on subsequent logins)
+                # user.last_login = timezone.now()
+                # user.save(update_fields=['last_login'])
+                # OR use: login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+
+
+                # Generate JWT tokens now that user is verified
+                refresh = RefreshToken.for_user(user)
+                print("User activated. Tokens generated.")
+                return Response(
+                    {
+                        "success": True,
+                        "message": "Email verified successfully. Login successful.",
+                        "access_token": str(refresh.access_token), # Match Flutter keys
+                        "refresh_token": str(refresh),             # Match Flutter keys
+                    },
+                    status=status.HTTP_200_OK, # OK for successful verification/login
+                )
+            elif user.otp == otp:
+                # OTP matched but was expired
+                 print("OTP matched but EXPIRED.")
+                 return Response(
+                     {"success": False, "error": "otp_expired", "message": "OTP has expired. Please request a new one."},
+                     status=status.HTTP_400_BAD_REQUEST
+                 )
+            else:
+                # OTP was incorrect
+                print("OTP INCORRECT.")
+                return Response(
+                    {"success": False, "error": "otp_invalid", "message": "Invalid OTP entered."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        except User.DoesNotExist:
+            print(f"User not found for OTP verification: {email}")
+            return Response(
+                 {"success": False, "error": "otp_invalid", "message": "Invalid OTP or email."}, # Generic message
+                 status=status.HTTP_400_BAD_REQUEST
+             )
+        except Exception as e:
+             print(f"--- ERROR during OTP verification: {e}")
+             # Log error e properly
+             return Response(
+                 {"error": f"An error occurred during verification."},
+                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+             )
 # ... (keep GoogleLoginView and UserDetailView) ...
 # TODO: Review GoogleLoginView again to ensure username handling (userid) is still appropriate
 

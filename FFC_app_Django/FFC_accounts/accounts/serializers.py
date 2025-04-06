@@ -43,13 +43,13 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         """
         Create and return a new `User` instance, using the provided username.
         """
-        # --- MODIFY create method ---
+        validated_data.pop('password2', None)
         user = User.objects.create_user(
             username=validated_data['username'],      # Use the validated username
             email=validated_data['email'],
             first_name=validated_data.get('first_name', ''), # Use .get if not strictly required by model in the future
             last_name=validated_data.get('last_name', ''),
-            password=validated_data['password']      # create_user handles hashing
+            password=validated_data['password'],is_active=False      # create_user handles hashing
         )
         return user
 # TODO: might want to add 'username' to UserDetailSerializer.Meta.fields later

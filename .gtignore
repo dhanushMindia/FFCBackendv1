@@ -30,4 +30,4 @@ venv/             # Or the name of your virtual environment
 env/
 .venv/
 .env/
-
+/FFC_app_Django/env

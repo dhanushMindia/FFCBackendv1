@@ -31,3 +31,4 @@ env/
 .venv/
 .env/
 /FFC_app_Django/env
+/FFC_app_Django/FFC_accounts/.env

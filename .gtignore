@@ -29,5 +29,5 @@ Thumbs.db        # Windows
 venv/             # Or the name of your virtual environment
 env/
 .venv/
-
+.env/
 

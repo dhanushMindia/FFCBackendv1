@@ -2,10 +2,11 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate, get_user_model
-from rest_framework_simplejwt.tokens import RefreshToken  # For JWT
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError  # For JWT
 from rest_framework.permissions import IsAuthenticated
 from .serializers import UserRegistrationSerializer, UserLoginSerializer, UserDetailSerializer
 import logging
+from django.utils import timezone
 
 
 #Google OAuth
@@ -51,6 +52,8 @@ class UserLoginView(APIView):
         user = authenticate(request=request, email=email, password=password)
 
         if user is not None:
+            user.last_login = timezone.now()
+            user.save(update_fields=['last_login'])
             # --- LOGIN SUCCESS ---
             refresh = RefreshToken.for_user(user)
             return Response(
@@ -126,7 +129,7 @@ class GoogleLoginView(APIView):
                  return Response({"success": False, "message": "No user ID (sub) provided in Google token"}, status=status.HTTP_400_BAD_REQUEST)
 
 
-            # --- Suggestion 1 & 2: Use get_or_create and update info ---
+            # --- Suggestion for future 1 & 2: Use get_or_create and update info ---
             user, created = User.objects.get_or_create(
                 email=email,  # Lookup user by email
                 defaults={    # Fields to use ONLY if creating a new user
@@ -139,7 +142,7 @@ class GoogleLoginView(APIView):
 
             if not created:
                 # --- Suggestion 2: Update existing user's info ---
-                # You might only want to update if the names are currently blank, or always update.
+                # We might only want to update if the names are currently blank, or always update.
                 update_fields = []
                 if first_name and user.first_name != first_name:
                      user.first_name = first_name
@@ -152,7 +155,8 @@ class GoogleLoginView(APIView):
                     user.save(update_fields=update_fields)
                 # No need to update username for existing user
 
-
+            user.last_login = timezone.now()
+            user.save(update_fields=['last_login'])
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
             access_token = str(refresh.access_token)
@@ -182,6 +186,34 @@ class GoogleLoginView(APIView):
                 {"success": False, "message": f"An internal server error occurred."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+class UserLogoutView(APIView):
+    permission_classes = [IsAuthenticated] # Only authenticated users can logout
+
+    def post(self, request):
+        try:
+            refresh_token = request.data.get("refresh")
+            if refresh_token is None:
+                return Response({"success": False, "message": "Refresh token is required."},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+
+            # Optionally logout from Django session framework if we opt to use auth.login()
+            # from django.contrib.auth import logout
+            # logout(request). hmm we;ll see
+
+            return Response({"success": True, "message": "Successfully logged out."},
+                            status=status.HTTP_200_OK) # Use 200 OK for successful action
+        except TokenError as e:
+            # Token is invalid or expired
+             return Response({"success": False, "message": f"Invalid refresh token: {str(e)}"},
+                             status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            # Log the error e
+            print(f"Error during logout: {e}") # Basic print for debug
+            return Response({"success": False, "message": "An error occurred during logout."},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class UserDetailView(APIView):

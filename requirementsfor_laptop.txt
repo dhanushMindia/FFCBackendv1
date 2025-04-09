@@ -3,6 +3,6 @@ Djangorestframework-simplejwt == 5.5.0
 Google-auth 
 Google-auth-oauthlib
 Google-auth-httplib2
-Decoupled
+python-decouple
 pip install psycopg2-binary
 #pip install psycopg2  for production

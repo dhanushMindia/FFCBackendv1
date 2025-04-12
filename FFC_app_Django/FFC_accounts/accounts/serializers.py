@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model, password_validation
-
+from questionnaire.serializers import QuestionnaireSubmissionSerializer
 
 
 User = get_user_model()  # Get the active User model (our custom one)
@@ -58,6 +58,19 @@ class UserLoginSerializer(serializers.Serializer):
     password = serializers.CharField(required=True, write_only=True)
 
 class UserDetailSerializer(serializers.ModelSerializer):
+    # Add the nested serializer field
+    # It uses related_name='questionnaire_submission' from the User model implicitly
+    questionnaire_submission = QuestionnaireSubmissionSerializer(read_only=True, required=False)
+
     class Meta:
         model = User
-        fields = ('id', 'email', 'first_name', 'last_name')
+        fields = (
+            'id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'is_active', 
+            'last_login',
+            'questionnaire_submission' # The nested questionnaire data
+        )

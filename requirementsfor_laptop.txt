@@ -7,3 +7,7 @@ python-decoupled
 psycopg2-binary
 django-cors-headers
 #pip install psycopg2  for production
+groq 
+tavily-python 
+python-dotenv 
+requests

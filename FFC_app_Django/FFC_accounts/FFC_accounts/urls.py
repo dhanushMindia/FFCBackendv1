@@ -23,6 +23,8 @@ urlpatterns = [
     path('admin/', admin.site.urls),  # Django admin site (optional)
     path('users/', include('accounts.urls')),  # Include URLs from the accounts app
     path("questionnaire/", include("questionnaire.urls")),
+    path('api/questionnaire/', include('questionnaire.urls')),
+    path('api/results/', include('results_processor.urls')),
 ]
 
 if settings.DEBUG:

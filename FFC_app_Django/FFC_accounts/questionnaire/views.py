@@ -7,6 +7,12 @@ from rest_framework.permissions import IsAuthenticated
 from .models import Question, QuestionnaireSubmission, Answer
 from .serializers import QuestionSerializer, AnswerWriteSerializer # Import necessary serializers
 
+from django.urls import reverse
+import requests
+from django.conf import settings
+import threading
+import json  # Added import for JSON handling
+
 # --- View to LIST Active Questions ---
 class QuestionListView(generics.ListAPIView):
     """ API endpoint to fetch all active questionnaire questions """
@@ -103,12 +109,111 @@ class SubmissionSaveView(views.APIView):
                     # Optionally: Fail the whole submission on first invalid answer
                     # return Response({"error": "Invalid answer data provided.", "details": answer_serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Create the success response
+            success_response = {
+                "success": True, 
+                "message": "Answers processed.", 
+                "details": processed_results
+            }
+            
+           # If submission is complete, trigger results processing
+            if is_complete_flag:
+                try:
+                    # Get the API endpoint URL for results processing
+                    process_url = request.build_absolute_uri(reverse('results_processor:process-results'))
+                    
+                    # Use the same authentication from the current request
+                    headers = {
+                        'Authorization': request.headers.get('Authorization'),
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    # Define the function to run in a separate thread
+                    def trigger_processing():
+                        try:
+                            # Make a POST request to the results processing endpoint
+                            process_response = requests.post(process_url, headers=headers)
+                            print(f"Results processing triggered. Status: {process_response.status_code}")
+                            
+                            # Optionally log any errors from the processing
+                            if process_response.status_code >= 400:
+                                print(f"Error in background results processing: {process_response.text}")
+                        except Exception as e:
+                            print(f"Exception in background results processing thread: {str(e)}")
+                    
+                    # Start processing in background thread so we don't delay the response
+                    processing_thread = threading.Thread(target=trigger_processing)
+                    processing_thread.daemon = True  # Thread will exit when main program exits
+                    processing_thread.start()
+                    
+                    # Add info to response so client knows processing was started
+                    success_response["results_processing"] = "initiated"
+                    print("Results processing has been initiated in the background")
+                    
+                except Exception as e:
+                    print(f"Error setting up results processing: {str(e)}")
+                    # Don't fail the submission if results processing setup fails
+                    success_response["results_processing"] = "error"
+                    success_response["results_processing_error"] = str(e)
 
-            # If loop completes, return overall success
-            return Response(
-                {"success": True, "message": "Answers processed.", "details": processed_results},
-                status=status.HTTP_200_OK
-            )
+            # Replace with:
+
+            # If submission is complete, trigger query generation
+            if is_complete_flag:
+                try:
+                    # Get the API endpoint URL for query generation
+                    generate_url = request.build_absolute_uri(reverse('results_processor:generate-query'))
+                    
+                    # Use the same authentication from the current request
+                    headers = {
+                        'Authorization': request.headers.get('Authorization'),
+                        'Content-Type': 'application/json'
+                    }
+                    
+                    # Extract valid questionnaire answers (filtering out null/empty answers)
+                    formatted_questionnaire_data = {}
+                    for answer in incoming_answers:
+                        question_id = answer.get('question_identifier')
+                        answer_value = answer.get('answer_value')
+                        if question_id and answer_value:  # Only include non-empty answers
+                            formatted_questionnaire_data[question_id] = answer_value
+                    
+                    # Define the function to run in a separate thread
+                    def trigger_query_generation():
+                        try:
+                            # Make a POST request to the query generation endpoint with the questionnaire data
+                            process_response = requests.post(
+                                generate_url, 
+                                headers=headers,
+                                json=formatted_questionnaire_data  # Send only the valid answers
+                            )
+                            print(f"Query generation triggered. Status: {process_response.status_code}")
+                            
+                            # Optionally log any errors from the processing
+                            if process_response.status_code >= 400:
+                                print(f"Error in background query generation: {process_response.text}")
+                            else:
+                                print(f"Query generation response: {process_response.text}")
+                        except Exception as e:
+                            print(f"Exception in background query generation thread: {str(e)}")
+                    
+                    # Start processing in background thread so we don't delay the response
+                    processing_thread = threading.Thread(target=trigger_query_generation)
+                    processing_thread.daemon = True  # Thread will exit when main program exits
+                    processing_thread.start()
+                    
+                    # Add info to response so client knows processing was started
+                    success_response["query_generation"] = "initiated"
+                    print("Query generation has been initiated in the background")
+                    
+                except Exception as e:
+                    print(f"Error setting up query generation: {str(e)}")
+                    # Don't fail the submission if query generation setup fails
+                    success_response["query_generation"] = "error"
+                    success_response["query_generation_error"] = str(e)
+                        
+            # Return the success response
+            return Response(success_response, status=status.HTTP_200_OK)
 
         except Exception as e:
             print(f"--- ERROR during submission processing: {e}")
@@ -117,3 +222,4 @@ class SubmissionSaveView(views.APIView):
                 {"error": "An internal error occurred while saving submission."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+        
